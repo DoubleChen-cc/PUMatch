@@ -1,5 +1,8 @@
 #!/bin/bash -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}"
+
 if test $# -ne 1
 then
   echo "usage: ./convert.sh <dir containing snap.txt>" 1>&2
