@@ -12,8 +12,22 @@ NVCC_FLAGS := -arch=sm_80 \
 INCLUDES   := -I.
 
 TARGET     := test
+MPI_TARGET := test_mpi
 SRC        := test.cu
+MPI_SRC    := test_mpi.cu
 OBJ        := $(SRC:.cu=.o)
+MPI_OBJ    := $(MPI_SRC:.cu=.o)
+
+MPI_PREFIX ?= /usr/local/openmpi
+MPI_CXX    := $(MPI_PREFIX)/bin/mpicxx
+# nvcc 不接受顶层的 -pthread，须交给主机编译器 / 链接器一侧
+MPI_RAW_COMPILE   := $(shell $(MPI_CXX) --showme:compile 2>/dev/null)
+MPI_COMPILE_FLAGS := $(filter-out -pthread,$(MPI_RAW_COMPILE)) -Xcompiler -pthread
+# nvcc 不能把 --showme:link 里的 -Wl,… 当作自身参数；-Wl 必须拆开成 -Xlinker 片段
+MPI_LINK_FLAGS    := -L$(MPI_PREFIX)/lib -lmpi \
+	-Xlinker -rpath -Xlinker $(MPI_PREFIX)/lib \
+	-Xlinker --enable-new-dtags \
+	-Xcompiler -pthread
 
 # 1. 把“实现缺失”的 cu 文件加进来（按你实际文件名写）
 OTHER_OBJS := src/buffer.o \
@@ -27,12 +41,22 @@ all: $(TARGET)
 $(TARGET): $(OBJ) $(OTHER_OBJS)
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $^
 
+# MPI 多节点入口：-rdc 目标文件必须由 nvcc 做最终链接（才会走 nvlink），再挂上 MPI 库
+$(MPI_TARGET): $(MPI_OBJ) $(OTHER_OBJS)
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $^ \
+		$(MPI_LINK_FLAGS) \
+		-L$(CUDA_PATH)/lib64 -lcudart -lcuda \
+		-lstdc++fs
+
 # 4. 生成 relocatable device code（-dc 而不是 -c）
 %.o: %.cu
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -dc $< -o $@
 
+$(MPI_OBJ): $(MPI_SRC)
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) $(MPI_COMPILE_FLAGS) -dc $< -o $@
+
 # 5. 清理
 clean:
-	rm -f $(TARGET) $(OBJ) $(OTHER_OBJS)
+	rm -f $(TARGET) $(MPI_TARGET) $(OBJ) $(MPI_OBJ) $(OTHER_OBJS)
 
 .PHONY: all clean

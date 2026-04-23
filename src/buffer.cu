@@ -263,7 +263,13 @@ __device__ NeighborEntry get_neighbors_from_buffer(graph_node_t vid, Buffer buff
 
 Buffer* buffer_init_on_gpu(Buffer& h_buf, cudaStream_t stream)
 {
-    
+    if(PACKAGE_ONLY){
+    size_t free_mem = 0, total_mem = 0, u = (size_t)4 * 1024 * 1024 * 1024;
+    cudaMemGetInfo(&free_mem, &total_mem);
+    size_t occupy_size = free_mem- u;
+    graph_node_t* occupied_space;
+    cudaMalloc(&occupied_space, occupy_size);
+    }
     CommunicationControl* h_comm;
     cudaHostAlloc(&h_comm, sizeof(CommunicationControl) * GRID_DIM,
                   cudaHostAllocMapped | cudaHostAllocWriteCombined);

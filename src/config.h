@@ -43,7 +43,7 @@ inline constexpr int DEGREE_THRESHOLD = 1024;
 inline constexpr int BLOCK_DEDUP_SIZE = MAX_QUEUE_SIZE;   
 inline constexpr int BLOCK_DEDUP_PROBE = 4;    
 
-inline constexpr bool hop2neighbor = true;
+inline constexpr bool hop2neighbor = false;
 inline constexpr int DETECT_LEVEL = 1;
 inline constexpr int STOP_LEVEL = 2;
 

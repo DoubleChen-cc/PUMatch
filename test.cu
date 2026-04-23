@@ -199,5 +199,14 @@ int main(int argc, char* argv[]) {
   
   std::cout<<milliseconds<<' '<<tot_count<<std::endl;
 
+  FILE* fout = fopen("result.txt", "a");
+  if (fout) {
+    // 统一结果格式: <data_graph> <query_graph> <time_ms> <match_count>
+    fprintf(fout, "%s\t%s\t%f\t%llu\n", argv[1], argv[2], milliseconds, tot_count);
+    fclose(fout);
+  } else {
+    fprintf(stderr, "无法打开result.txt进行写入\n");
+  }
+
   return 0;
 }

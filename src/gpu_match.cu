@@ -319,12 +319,68 @@
   }
 
   __forceinline__ __device__ void get_job(JobQueue* q, graph_node_t& cur_pos, graph_node_t& njobs) {
-    lock(&(q->mutex));
-    cur_pos = q->cur;
-    q->cur += JOB_CHUNK_SIZE;
-    if (q->cur > q->length) q->cur = q->length;
-    njobs = q->cur - cur_pos;
-    unlock(&(q->mutex));
+    // Persistent-kernel job dispatcher:
+    // - take jobs from current interval [work_lo, work_hi)
+    // - when current interval is exhausted, swap in next interval when next_ready==1
+    // - when host sets done==1 and no next interval is ready, return njobs=0 (let matcher stop)
+    while (true) {
+      lock(&(q->mutex));
+      cur_pos = q->cur;
+      graph_node_t cap = q->work_hi;
+      if (cap > q->length) cap = q->length;
+
+      if (cur_pos >= cap) {
+        const int next_ready = atomicAdd(&q->next_ready, 0);
+        const int done = atomicAdd(&q->done, 0);
+
+        if (next_ready) {
+          // Swap current interval <-> next interval under the queue mutex.
+          q->work_lo = q->next_lo;
+          q->work_hi = q->next_hi;
+          q->preempt_at = q->next_preempt_at;
+          q->cur = q->next_lo;
+          q->preempt_latched = 0;
+          q->next_ready = 0;
+
+          cur_pos = q->cur;
+          cap = q->work_hi;
+          if (cap > q->length) cap = q->length;
+        } else if (done) {
+          njobs = 0;
+          unlock(&(q->mutex));
+          return;
+        } else {
+          // No next work yet:
+          // - If this is not a persistent/preempt mode (preempt_flag==nullptr), keep old behavior:
+          //   interval exhausted => njobs=0.
+          // - Otherwise, wait for host to provide next interval or to set done==1.
+          if (q->preempt_flag == nullptr) {
+            njobs = 0;
+            unlock(&(q->mutex));
+            return;
+          }
+          unlock(&(q->mutex));
+          while (atomicAdd(&q->next_ready, 0) == 0 && atomicAdd(&q->done, 0) == 0) {
+            ;
+          }
+          continue;
+        }
+      }
+
+      graph_node_t nxt = cur_pos + JOB_CHUNK_SIZE;
+      if (nxt > cap) nxt = cap;
+      q->cur = nxt;
+      njobs = nxt - cur_pos;
+
+      if (q->preempt_at < cap && nxt >= q->preempt_at && q->preempt_flag != nullptr) {
+        int prev = atomicCAS(&q->preempt_latched, 0, 1);
+        if (prev == 0) {
+          atomicExch(q->preempt_flag, 1);
+        }
+      }
+      unlock(&(q->mutex));
+      return;
+    }
   }
 
   __device__ bool extend(Graph* g, Graph* g_managed, Pattern* pat, CallStack* stk, JobQueue* q, pattern_node_t level, Buffer* d_buffer, BlockQueue* block_queue,  SyncFlags2* flags, int* write_block_flags, int* cpu_visible_queue, MissingTree* tree, bool is_repeated, int idx) {
@@ -1005,6 +1061,10 @@
     __shared__ int8_t repeated_cnt[PAT_SIZE][NWARPS_PER_BLOCK];
     
     if (threadIdx.x == 0) {
+      for (int i = 0; i < NWARPS_PER_BLOCK; ++i) {
+        count[i] = 0;
+        stealed[i] = false;
+      }
       for (int i = 0; i < PAT_SIZE; ++i) {
         for (int j = 0; j < NWARPS_PER_BLOCK; ++j) {
           repeated_cnt[i][j] = 0;
